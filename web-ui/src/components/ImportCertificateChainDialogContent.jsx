@@ -42,22 +42,33 @@ export default function ImportCertificateChainDialogContent({
 
   // Parse certificate chain when PEM text changes
   useEffect(() => {
+    let cancelled = false
     if (pemText.trim()) {
-      const parsed = parseCertificateChainFromPem(pemText)
-      if (parsed.length === 0) {
-        setParseError('No valid certificates found in the provided text')
-        setCertificates([])
-        setSelectedCertificateIndex(null)
-        setSelectedCertificatePem(null)
-      } else {
-        setParseError(null)
-        setCertificates(parsed)
-        // Auto-select first certificate if available
-        if (parsed.length > 0) {
-          setSelectedCertificateIndex(0)
-          setSelectedCertificatePem(parsed[0].certificate)
-        }
-      }
+      parseCertificateChainFromPem(pemText)
+        .then(parsed => {
+          if (cancelled) return
+          if (parsed.length === 0) {
+            setParseError('No valid certificates found in the provided text')
+            setCertificates([])
+            setSelectedCertificateIndex(null)
+            setSelectedCertificatePem(null)
+          } else {
+            setParseError(null)
+            setCertificates(parsed)
+            if (parsed.length > 0) {
+              setSelectedCertificateIndex(0)
+              setSelectedCertificatePem(parsed[0].certificate)
+            }
+          }
+        })
+        .catch(err => {
+          if (cancelled) return
+          setParseError(`Failed to parse certificates: ${err.message}`)
+          setCertificates([])
+          setSelectedCertificateIndex(null)
+          setSelectedCertificatePem(null)
+        })
+      return () => { cancelled = true }
     } else {
       setParseError(null)
       setCertificates([])
