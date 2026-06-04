@@ -42,6 +42,7 @@ import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.io.StringReader;
 import java.net.URL;
+import java.security.InvalidKeyException;
 import java.security.Key;
 import java.security.KeyFactory;
 import java.security.KeyManagementException;
@@ -379,7 +380,7 @@ public final class CertificateService {
             privateKey = KeyFactory.getInstance("RSA")
                 .generatePrivate(new PKCS8EncodedKeySpec(keyBytes));
         } catch (InvalidKeySpecException e) {
-            if (e.getMessage().equals("java.security.InvalidKeyException: IOException : algid parse error, not a sequence")) {
+            if (e.getCause() instanceof InvalidKeyException) {
                 // Attempt to convert to PKCS#8
                 return attemptPkcs8Conversion(key);
             }
