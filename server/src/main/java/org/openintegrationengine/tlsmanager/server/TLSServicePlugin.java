@@ -51,6 +51,7 @@ public class TLSServicePlugin implements ServicePlugin {
     public void init(Properties properties) {
         var configurationController = ControllerFactory.getFactory().createConfigurationController();
         var channelController = ControllerFactory.getFactory().createChannelController();
+        var extensionController = ControllerFactory.getFactory().createExtensionController();
 
         this.certificateService = new CertificateService(channelController);
         this.socketFactoryService = new SocketFactoryService(
@@ -63,23 +64,32 @@ public class TLSServicePlugin implements ServicePlugin {
             new TemplateValueReplacer()
         );
 
-        configurationController.saveProperty(
-            "HTTP",
-            "httpConfigurationClass",
-            TLSHttpConfiguration.class.getCanonicalName()
-        );
+        if (extensionController.isExtensionEnabled("HTTP Sender")
+            || extensionController.isExtensionEnabled("HTTP Listener")) {
+            configurationController.saveProperty(
+                "HTTP",
+                "httpConfigurationClass",
+                TLSHttpConfiguration.class.getCanonicalName()
+            );
+        }
 
-        configurationController.saveProperty(
-            "TCP",
-            "tcpConfigurationClass",
-            TLSTcpConfiguration.class.getCanonicalName()
-        );
+        if (extensionController.isExtensionEnabled("TCP Sender")
+            || extensionController.isExtensionEnabled("TCP Listener")) {
+            configurationController.saveProperty(
+                "TCP",
+                "tcpConfigurationClass",
+                TLSTcpConfiguration.class.getCanonicalName()
+            );
+        }
 
-        configurationController.saveProperty(
-            "WS",
-            "wsConfigurationClass",
-            TLSWebServiceConfiguration.class.getCanonicalName()
-        );
+        if (extensionController.isExtensionEnabled("Web Service Sender")
+            || extensionController.isExtensionEnabled("Web Service Listener")) {
+            configurationController.saveProperty(
+                "WS",
+                "wsConfigurationClass",
+                TLSWebServiceConfiguration.class.getCanonicalName()
+            );
+        }
 
         SerializationController.registerSerializableClasses();
 
@@ -124,7 +134,8 @@ public class TLSServicePlugin implements ServicePlugin {
     }
 
     @Override
-    public void stop() { }
+    public void stop() {
+    }
 
     public static TLSServicePlugin getPluginInstance() {
         var servicePlugin = ControllerFactory.getFactory()
