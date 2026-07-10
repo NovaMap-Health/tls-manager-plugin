@@ -59,8 +59,21 @@ public class StateAwareTLSServerSocket extends ServerSocket {
         }
 
         var sslSocket = (SSLSocket) delegate.accept();
-        sslSocket.startHandshake();
-        return sslSocket;
+        var oldTimeout = sslSocket.getSoTimeout();
+
+        try {
+            sslSocket.setSoTimeout(10000);
+            sslSocket.startHandshake();
+            return sslSocket;
+        } catch (IOException e) {
+            try {
+                sslSocket.close();
+            } catch (IOException ignored) {
+            }
+            throw e;
+        } finally {
+            sslSocket.setSoTimeout(oldTimeout);
+        }
     }
 
     @Override
