@@ -11,7 +11,7 @@
 
     <groupId>org.openintegrationengine</groupId>
     <artifactId>tlsmanager</artifactId>
-    <version>1.0.6</version>
+    <version>1.0.7</version>
     <packaging>pom</packaging>
 
     <licenses>
@@ -169,25 +169,44 @@
         </pluginManagement>
 
         <plugins>
-            <plugin>
-                <groupId>org.apache.maven.plugins</groupId>
-                <artifactId>maven-jarsigner-plugin</artifactId>
-                <version>${maven-jarsigner-plugin.version}</version>
-                <executions>
-                    <execution>
-                        <id>sign</id>
-                        <goals>
-                            <goal>sign</goal>
-                        </goals>
-                    </execution>
-                </executions>
-                <configuration>
-                    <keystore>${project.parent.basedir}/certificate/keystore.jks</keystore>
-                    <alias>selfsigned</alias>
-                    <storepass>storepass</storepass>
-                    <keypass>keypass</keypass>
-                </configuration>
-            </plugin>
+<!--            <plugin>-->
+<!--                <groupId>org.apache.maven.plugins</groupId>-->
+<!--                <artifactId>maven-jarsigner-plugin</artifactId>-->
+<!--                <version>${maven-jarsigner-plugin.version}</version>-->
+<!--                <executions>-->
+<!--                    <execution>-->
+<!--                        <id>sign</id>-->
+<!--                        <phase>package</phase>-->
+<!--                        <goals>-->
+<!--                            <goal>sign</goal>-->
+<!--                        </goals>-->
+<!--                    </execution>-->
+<!--                </executions>-->
+
+<!--                <configuration>-->
+<!--                    &lt;!&ndash; Required for PKCS#11 &ndash;&gt;-->
+<!--                    <keystore>NONE</keystore>-->
+<!--                    <storetype>PKCS11</storetype>-->
+<!--                    <storepass>294690</storepass>-->
+
+<!--                    &lt;!&ndash; Alias as seen by jarsigner &ndash;&gt;-->
+<!--                    <alias>x509cert</alias>-->
+
+<!--                    &lt;!&ndash; Pass raw jarsigner arguments &ndash;&gt;-->
+<!--                    <arguments>-->
+<!--                        <argument>-providerClass</argument>-->
+<!--                        <argument>sun.security.pkcs11.SunPKCS11</argument>-->
+<!--                        <argument>-providerArg</argument>-->
+<!--                        <argument>${project.basedir}\pkcs11.config</argument>-->
+<!--                        <argument>-tsa</argument>-->
+<!--                        <argument>http://timestamp.digicert.com</argument>-->
+<!--                    </arguments>-->
+
+<!--                    &lt;!&ndash; Optional but recommended &ndash;&gt;-->
+<!--                    <verbose>true</verbose>-->
+<!--                    <removeExistingSignatures>true</removeExistingSignatures>-->
+<!--                </configuration>-->
+<!--            </plugin>-->
 
             <plugin>
                 <groupId>org.bsc.maven</groupId>
