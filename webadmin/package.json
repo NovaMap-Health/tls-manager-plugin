@@ -1,0 +1,17 @@
+{
+    "name": "tls-manager-webadmin",
+    "version": "1.0.7",
+    "private": true,
+    "description": "Build for the TLS Manager web admin plugin (compiles web/plugin.jsx -> web/plugin.js).",
+    "type": "module",
+    "scripts": {
+        "build": "node build.mjs",
+        "test:regression": "npm run build && node tests/run-regressions.mjs"
+    },
+    "devDependencies": {
+        "esbuild": "^0.21.0"
+    },
+    "dependencies": {
+        "jsrsasign": "^11.1.3"
+    }
+}

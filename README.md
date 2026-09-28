@@ -32,6 +32,11 @@ In addition, the following global features have been implemented:
 * Remove trusted certificate  
 * Remove local key pairs
 
+Channel scripts can also call bundled `TLSManager.httpGet`, `httpPost`, `httpPut`,
+`httpPatch`, `httpDelete`, `httpHead`, and `httpOptions` helpers directly. HTTPS
+uses managed trust, with optional explicit managed client-certificate selection
+for mTLS. See the [HTTP helper reference](docs/http-helpers.md).
+
 # Installation notes
 
 We will be distributing the plugin as a ZIP file for importing in the usual manner. It will be signed by NovaMap Health Limited using a code signing cert issued by a common CA. [Here](https://github.com/ssrowe/docs-website/blob/docs/plugin-guide/docs/engine/plugins.md) is an excellent guide written by Sean Rowe on installing plugins into OIE.

@@ -2,7 +2,6 @@
 target/
 *.iml
 *.zip
-*.json
 plugin.xml
 
 

@@ -86,6 +86,10 @@ public final class CertificateService {
     private TrustStoreBackend extraTrustStoreBackend;
     private TrustStoreBackend extraKeyStoreBackend;
 
+    private boolean httpHelperStoresInitialized;
+    private boolean httpHelperTrustStoreUsable;
+    private boolean httpHelperKeyStoreUsable;
+
     private final ChannelController channelController;
     private final TemplateValueReplacer templateValueReplacer;
 
@@ -98,7 +102,8 @@ public final class CertificateService {
         this.channelController = channelController;
     }
 
-    void init(TLSPluginConfiguration pluginConfiguration) {
+    synchronized void init(TLSPluginConfiguration pluginConfiguration) {
+        httpHelperStoresInitialized = false;
         systemTrustStoreBackend = new SystemTrustStoreBackend();
 
         if (pluginConfiguration.persistenceMode() == PersistenceMode.DATABASE) {
@@ -138,6 +143,26 @@ public final class CertificateService {
         loadKeyStore(systemTrustStore, cacertsBytes, systemTrustStoreBackend.loadPassword());
         loadKeyStore(externalTrustStore, extraTrustStoreBytes, extraTrustStoreBackend.loadPassword());
         loadKeyStore(externalKeyStore, extraKeyStoreBytes, extraKeyStoreBackend.loadPassword());
+        httpHelperTrustStoreUsable = true;
+        httpHelperKeyStoreUsable = true;
+        httpHelperStoresInitialized = true;
+    }
+
+    /**
+     * Takes a request-owned snapshot under the same lock as managed-store updates.
+     * A null selection means all managed trust entries; an empty selection means none.
+     * Only the selected client identity is copied, never the complete private-key store.
+     */
+    synchronized HttpHelperTls.Material snapshotHttpHelperTls(String clientAlias,
+            boolean trustSystemTruststore, Set<String> trustedAliases) {
+        if (!httpHelperStoresInitialized || !httpHelperTrustStoreUsable || !httpHelperKeyStoreUsable
+                || externalTrustStore == null || externalKeyStore == null
+                || extraKeyStoreBackend == null || (trustSystemTruststore && systemTrustStore == null)) {
+            throw new HttpTlsConfigurationException("TLS Manager certificate services are unavailable");
+        }
+        return HttpHelperTls.snapshot(externalTrustStore,
+                trustSystemTruststore ? systemTrustStore : null, externalKeyStore,
+                extraKeyStoreBackend, clientAlias, trustedAliases);
     }
 
     KeyStore getKeyStore(String alias) {
@@ -179,20 +204,22 @@ public final class CertificateService {
         }
     }
 
-    public void storeExtraTrustStore(byte[] keystoreBytes, char[] password) {
+    public synchronized void storeExtraTrustStore(byte[] keystoreBytes, char[] password) {
+        httpHelperTrustStoreUsable = false;
         try (var bais = new ByteArrayInputStream(keystoreBytes)) {
             externalTrustStore.load(bais, password);
-            extraTrustStoreBackend.persist(keystoreBytes);
+            httpHelperTrustStoreUsable = extraTrustStoreBackend.persist(keystoreBytes);
         } catch (CertificateException | IOException | NoSuchAlgorithmException e) {
             log.error("Error overwriting truststore", e);
             throw new RuntimeException(e);
         }
     }
 
-    public void storeExtraKeyStore(byte[] keystoreBytes, char[] password) {
+    public synchronized void storeExtraKeyStore(byte[] keystoreBytes, char[] password) {
+        httpHelperKeyStoreUsable = false;
         try (var bais = new ByteArrayInputStream(keystoreBytes)) {
             externalKeyStore.load(bais, password);
-            extraKeyStoreBackend.persist(keystoreBytes);
+            httpHelperKeyStoreUsable = extraKeyStoreBackend.persist(keystoreBytes);
         } catch (CertificateException | IOException | NoSuchAlgorithmException e) {
             log.error("Error overwriting keystore", e);
             throw new RuntimeException(e);
