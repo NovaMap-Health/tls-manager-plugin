@@ -106,23 +106,155 @@ try {
         await expect(dialog.locator('input[type="text"]').nth(1)).toHaveValue(alias);
     };
 
+    const serverPicker = page => page.locator('#tls button[data-fkey="serverCertificateAlias"]');
+    const serverSummary = page => serverPicker(page).locator('..').locator('span').last();
+    const chooseServerCertificate = async (page, alias) => {
+        await serverPicker(page).click();
+        const dialog = page.getByRole('dialog', { name: 'Server Certificate Picker', exact: true });
+        await dialog.getByRole('radio', { name: alias || '<None>', exact: true }).check();
+        await dialog.getByRole('button', { name: 'OK', exact: true }).click();
+    };
+
     for (const transport of ['TCP Sender', 'TCP Listener']) {
-        await check(`${transport}: mode changes update sibling TLS root and preserve values`, `transport=${encodeURIComponent(transport)}`, {}, async page => {
+        await check(`${transport}: mode changes update sibling TLS root and preserve values`, `transport=${encodeURIComponent(transport)}`, { stores: { native: [], trusted: [], private: [{ alias: 'server-key' }] } }, async page => {
             await expect(page.locator('#tls').getByText('Server Trust', { exact: true })).toBeVisible();
             assert.equal(await page.evaluate(() => window.dirtyCount), 0, 'Viewing does not dirty the connector');
-            await page.locator('#tls input[data-fkey="clientCertificateAlias"]').fill('client-key');
+            await page.evaluate(() => { window.tlsProperties().clientCertificateAlias = 'client-key'; });
             await page.locator('#tcp [data-fkey="serverMode"]').getByLabel('Server', { exact: true }).check();
             await expect(page.locator('#tls').getByText('Server Identity', { exact: true })).toBeVisible();
             await expect(page.locator('#tls').getByText('Server Trust', { exact: true })).toHaveCount(0);
-            await page.locator('#tls input[data-fkey="serverCertificateAlias"]').fill('server-key');
+            await chooseServerCertificate(page, 'server-key');
             await page.locator('#tcp [data-fkey="serverMode"]').getByLabel('Client', { exact: true }).check();
-            await expect(page.locator('#tls input[data-fkey="clientCertificateAlias"]')).toHaveValue('client-key');
+            await expect(page.locator('#tls').getByText('client-key', { exact: true })).toBeVisible();
             assert.equal((await properties(page)).serverCertificateAlias, 'server-key');
             await page.evaluate(() => window.mountTls());
             await page.locator('#tcp [data-fkey="serverMode"]').getByLabel('Server', { exact: true }).check();
-            await expect(page.locator('#tls input[data-fkey="serverCertificateAlias"]')).toHaveValue('server-key');
+            await expect(serverSummary(page)).toHaveText('server-key');
         });
     }
+
+    await check('Server picker is single-select, filterable, cancellable and preserves missing aliases', 'server=1&saved=removed-key', {
+        stores: { native: [], trusted: [{ alias: 'trusted-only' }], private: [{ alias: 'beta' }, { alias: 'alpha' }, { alias: 'alpha' }] }
+    }, async page => {
+        const button = serverPicker(page);
+        await expect(button).toBeEnabled();
+        await expect(button).toHaveText('Edit…');
+        await expect(serverSummary(page)).toHaveText('removed-key (unavailable)');
+        assert.equal(await page.evaluate(() => window.dirtyCount), 0);
+        await button.click();
+        let dialog = page.getByRole('dialog');
+        await expect(dialog.getByRole('radio')).toHaveCount(2);
+        await expect(dialog.getByRole('columnheader', { name: 'Options', exact: true })).toBeVisible();
+        await expect(dialog.getByRole('group', { name: 'TLS settings' })).toBeVisible();
+        await expect(dialog.getByRole('radio', { name: '<None>', exact: true })).toHaveCount(0);
+        await dialog.getByRole('button', { name: 'OK', exact: true }).click();
+        await expect(dialog.getByRole('alert')).toHaveText('Select a certificate before clicking OK.');
+        assert.equal((await properties(page)).serverCertificateAlias, 'removed-key');
+        await expect(dialog.getByRole('checkbox')).toHaveCount(0);
+        await expect(dialog.getByRole('radio', { name: 'removed-key (unavailable)', exact: true })).toHaveCount(0);
+        await expect(dialog.getByText('trusted-only', { exact: true })).toHaveCount(0);
+        await dialog.getByRole('radio', { name: 'alpha', exact: true }).check();
+        await dialog.getByRole('radio', { name: 'beta', exact: true }).check();
+        await expect(dialog.locator('input[type="radio"]:checked')).toHaveCount(1);
+        await expect(dialog.getByRole('radio', { name: 'alpha', exact: true })).not.toBeChecked();
+        await dialog.locator('input[type="text"]').fill('alpha');
+        await expect(dialog.getByRole('radio', { name: 'beta', exact: true })).toHaveCount(0);
+        await dialog.locator('input[type="text"]').fill('');
+        await expect(dialog.getByRole('radio', { name: 'beta', exact: true })).toBeChecked();
+        assert.equal((await properties(page)).serverCertificateAlias, 'removed-key', 'Draft does not save early');
+        await dialog.getByRole('button', { name: 'Cancel', exact: true }).click();
+        assert.equal((await properties(page)).serverCertificateAlias, 'removed-key');
+        assert.equal(await page.evaluate(() => window.dirtyCount), 0);
+        await chooseServerCertificate(page, 'beta');
+        assert.equal((await properties(page)).serverCertificateAlias, 'beta');
+        await expect(serverSummary(page)).toHaveText('beta');
+        await page.evaluate(() => window.mountTls());
+        await expect(button).toBeEnabled();
+        await expect(serverSummary(page)).toHaveText('beta');
+        await button.click();
+        dialog = page.getByRole('dialog');
+        await expect(dialog.getByRole('radio', { name: 'beta', exact: true })).toBeChecked();
+        await dialog.getByRole('button', { name: 'OK', exact: true }).click();
+        assert.equal((await properties(page)).serverCertificateAlias, 'beta');
+        await expect(serverSummary(page)).toHaveText('beta');
+    });
+
+    await check('Server picker without saved certificate cannot apply an empty selection', 'server=1', {
+        stores: { native: [], trusted: [], private: [{ alias: 'oie' }] }
+    }, async page => {
+        await serverPicker(page).click();
+        const dialog = page.getByRole('dialog');
+        await expect(dialog.getByRole('radio')).toHaveCount(1);
+        await expect(dialog.getByRole('radio', { name: 'oie', exact: true })).not.toBeChecked();
+        await dialog.getByRole('button', { name: 'OK', exact: true }).click();
+        await expect(dialog).toBeVisible();
+        assert.equal((await properties(page)).serverCertificateAlias, null);
+        assert.equal(await page.evaluate(() => window.dirtyCount), 0);
+        await dialog.getByRole('radio', { name: 'oie', exact: true }).check();
+        await dialog.getByRole('button', { name: 'OK', exact: true }).click();
+        assert.equal((await properties(page)).serverCertificateAlias, 'oie');
+    });
+
+    await check('Optional client certificate picker still supports clearing a selection', '', {
+        stores: { native: [], trusted: [], private: [{ alias: 'client-key' }] }
+    }, async page => {
+        const button = page.locator('#tls').getByRole('button', { name: 'Select…', exact: true });
+        await button.click();
+        let dialog = page.getByRole('dialog', { name: 'Client Certificate Picker', exact: true });
+        await dialog.getByRole('radio', { name: 'client-key', exact: true }).check();
+        await dialog.getByRole('button', { name: 'OK', exact: true }).click();
+        assert.equal((await properties(page)).clientCertificateAlias, 'client-key');
+        await button.click();
+        dialog = page.getByRole('dialog');
+        await dialog.getByRole('radio', { name: '<None>', exact: true }).check();
+        await dialog.getByRole('button', { name: 'OK', exact: true }).click();
+        assert.equal((await properties(page)).clientCertificateAlias, null);
+    });
+
+    for (const failed of [false, true]) {
+        await check(`Server picker preserves saved alias when store ${failed ? 'fails' : 'is empty'}`, 'server=1&saved=saved-key', {
+            failStores: failed ? ['private'] : []
+        }, async page => {
+            const select = serverPicker(page);
+            await expect(page.getByText(failed ? /Unable to load server certificates/ : /No local certificates available/)).toBeVisible();
+            await expect(select).toBeDisabled();
+            await expect(serverSummary(page)).toHaveText(failed ? 'saved-key' : 'saved-key (unavailable)');
+            await expect(page.locator('#tls input[data-fkey="serverCertificateAlias"]')).toHaveCount(0);
+            assert.equal((await properties(page)).serverCertificateAlias, 'saved-key');
+            assert.equal(await page.evaluate(() => window.dirtyCount), 0);
+        });
+    }
+
+    await check('Server picker loading preserves saved value and resolves without dirtying', 'server=1&saved=alpha', {
+        delayLocal: true, stores: { native: [], trusted: [], private: [{ alias: 'alpha' }] }
+    }, async page => {
+        const select = serverPicker(page);
+        await expect(page.getByText('Loading server certificates…', { exact: true })).toBeVisible();
+        await expect(select).toBeDisabled();
+        await expect(serverSummary(page)).toHaveText('alpha');
+        await page.evaluate(() => window.resolveLocal());
+        await expect(select).toBeEnabled();
+        await expect(serverSummary(page)).toHaveText('alpha');
+        assert.equal(await page.evaluate(() => window.dirtyCount), 0);
+    });
+
+    await check('Server picker missing plugin explains recovery; reopening retries successfully', 'server=1', {
+        failStores: ['private'], storeStatus: 404
+    }, async page => {
+        const select = serverPicker(page);
+        await expect(page.getByText(/TLS Manager engine plugin not detected. Install it/)).toBeVisible();
+        await expect(select).toBeDisabled();
+        await page.evaluate(() => {
+            window.fixture.failStores = [];
+            window.fixture.stores.private = [{ alias: 'new-key' }];
+            window.mountTls();
+        });
+        await expect(select).toBeEnabled();
+        await expect(serverSummary(page)).toHaveText('None selected');
+        assert.equal(await page.evaluate(() => window.dirtyCount), 0);
+        await chooseServerCertificate(page, 'new-key');
+        assert.equal((await properties(page)).serverCertificateAlias, 'new-key');
+    });
 
     for (const [index, key, retained, removed] of [
         [0, 'usedProtocols', 'TLSv1.3', 'TLSv1.1'],

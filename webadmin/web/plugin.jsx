@@ -234,39 +234,57 @@ function openMultiPicker({ title, options, selected, useServerDefault, onApply }
     });
 }
 
-/* Single-select picker (Server / Client Certificate). Filterable radio list of
- * keystore aliases plus a "<None>" row. onApply(alias|null). */
-function openCertPicker({ title, aliases, current, onApply }) {
+/* Single-select certificate picker. Server identity requires a local certificate;
+ * optional client identity retains its explicit clearing option. */
+function openCertPicker({ title, aliases, current, onApply, required = false }) {
     let chosen = current || '';
     const name = 'tlscertpick-' + Math.random().toString(36).slice(2);
-    const filterInput = textInput('', { placeholder: 'Filter…', style: { flex: '1' } });
-    const listWrap = h('div', { style: { maxHeight: '320px', overflow: 'auto', border: '1px solid var(--line)', borderRadius: '4px', marginTop: '8px' } });
+    const filterInput = textInput('', { id: `${name}-filter`, placeholder: 'Filter…', style: { flex: '1', minWidth: '0' } });
+    const rows = h('tbody');
+    const error = h('div.hint', { role: 'alert', hidden: true }, 'Select a certificate before clicking OK.');
+    const listWrap = h('div', { style: {
+        height: required ? 'min(420px, 50vh)' : undefined,
+        maxHeight: required ? undefined : '320px', overflow: 'auto',
+        border: '1px solid var(--line)', marginTop: '8px'
+    } }, h('table', { style: { width: '100%', borderCollapse: 'collapse' } },
+        h('thead', h('tr',
+            h('th', { scope: 'col', 'aria-label': 'Selection', style: { width: '32px' } }),
+            h('th', { scope: 'col', style: { textAlign: 'center' } }, 'Options'))), rows));
 
     function build() {
-        clear(listWrap);
+        clear(rows);
         const f = filterInput.value.trim().toLowerCase();
-        const noneBox = h('input', { type: 'radio', name, checked: !chosen });
-        noneBox.addEventListener('change', () => { chosen = ''; });
-        listWrap.appendChild(pickRow(noneBox, '<None>'));
-        for (const a of aliases) {
-            if (f && !a.toLowerCase().includes(f)) continue;
-            const box = h('input', { type: 'radio', name, checked: chosen === a });
-            box.addEventListener('change', () => { chosen = a; });
-            listWrap.appendChild(pickRow(box, a));
+        const options = required ? aliases : ['', ...aliases];
+        for (const [index, alias] of options.entries()) {
+            if (alias && f && !alias.toLowerCase().includes(f)) continue;
+            const id = `${name}-${index}`;
+            const box = h('input', { id, type: 'radio', name, checked: chosen === alias });
+            box.addEventListener('change', () => { chosen = alias; error.hidden = true; });
+            rows.appendChild(h('tr',
+                h('td', { style: { width: '32px', textAlign: 'center' } }, box),
+                h('td', h('label', { for: id, style: { display: 'block', cursor: 'pointer' } }, alias || '<None>'))));
         }
+        if (!rows.children.length) rows.appendChild(h('tr', h('td', { colspan: 2 }, 'No matching certificates.')));
     }
     build();
     filterInput.addEventListener('input', build);
-
+    const apply = {
+        label: 'OK', primary: true, onClick: () => {
+            if (required && !aliases.includes(chosen)) {
+                error.hidden = false;
+                return false;
+            }
+            onApply(chosen || null);
+        }
+    };
     modal({
-        title, size: 'wide',
-        body: h('div', { style: { minWidth: '420px' } },
-            h('div', { style: { display: 'flex', alignItems: 'center', gap: '10px' } }, h('label', 'Filter:'), filterInput),
-            listWrap),
-        buttons: [
-            { label: 'Cancel' },
-            { label: 'OK', primary: true, onClick: () => onApply(chosen || null) }
-        ]
+        title,
+        body: h('fieldset', { style: { minWidth: '0', margin: '0', padding: '10px', border: '1px solid var(--line)' } },
+            h('legend', 'TLS settings'),
+            h('div', { style: { display: 'flex', alignItems: 'center', gap: '10px' } },
+                h('label', { for: `${name}-filter` }, 'Filter:'), filterInput),
+            listWrap, error),
+        buttons: [apply, { label: 'Cancel' }]
     });
 }
 
@@ -384,7 +402,7 @@ function TlsConnectorPanel({ getEntry, setEntry, connector, onChange }) {
      * the state bump repaints the form (and thus rebuilds fieldDefs() with the
      * resolved option lists). */
     const [data, setData] = React.useState({
-        localAliases: null, trustedAliases: null, protocols: null, ciphers: null, extMissing: false
+        localAliases: null, trustedAliases: null, protocols: null, ciphers: null, extMissing: false, localLoading: true
     });
 
     React.useEffect(() => {
@@ -395,7 +413,7 @@ function TlsConnectorPanel({ getEntry, setEntry, connector, onChange }) {
             api.get('/server/protocolsAndCipherSuites')
         ]).then(([local, trusted, crypto]) => {
             if (cancelled) return;
-            const next = { localAliases: null, trustedAliases: null, protocols: null, ciphers: null, extMissing: false };
+            const next = { localAliases: null, trustedAliases: null, protocols: null, ciphers: null, extMissing: false, localLoading: false };
             if (local.status === 'fulfilled') {
                 next.localAliases = certList(local.value).map(c => String(c.alias ?? '')).filter(Boolean);
             } else if (notInstalled(local.reason)) {
@@ -487,6 +505,42 @@ function TlsConnectorPanel({ getEntry, setEntry, connector, onChange }) {
         };
     }
 
+    function serverCertificateField() {
+        const aliases = [...new Set(data.localAliases || [])].sort((a, b) => a.localeCompare(b));
+        const unavailable = data.localAliases === null;
+        const message = data.localLoading ? 'Loading server certificates…'
+            : data.extMissing ? 'TLS Manager engine plugin not detected. Install it, then reopen these settings.'
+            : unavailable ? 'Unable to load server certificates. Reopen these settings to retry.'
+            : !aliases.length ? 'No local certificates available. Import a key pair in TLS Manager, then reopen these settings.'
+            : 'Certificate presented to connecting clients (required)';
+        return {
+            label: 'Server Certificate', type: 'custom', visible: enabled,
+            render: (p, { onChange }) => {
+                const summary = h('span', { style: { marginLeft: '8px', fontSize: '13px' } });
+                const repaint = () => {
+                    const alias = p.serverCertificateAlias;
+                    summary.textContent = alias
+                        ? `${alias}${!unavailable && !aliases.includes(alias) ? ' (unavailable)' : ''}`
+                        : 'None selected';
+                };
+                const btn = h('button.btn', {
+                    type: 'button', disabled: unavailable || !aliases.length,
+                    'data-fkey': 'serverCertificateAlias',
+                    style: { display: 'inline-flex', alignItems: 'center', gap: '6px' }
+                }, icon('settings'), 'Edit…');
+                btn.addEventListener('click', () => openCertPicker({
+                    title: 'Server Certificate Picker', aliases,
+                    current: p.serverCertificateAlias || '', required: true,
+                    onApply: (alias) => { p.serverCertificateAlias = alias; onChange(); repaint(); }
+                }));
+                repaint();
+                return h('div',
+                    h('div', { style: { display: 'flex', alignItems: 'center' } }, btn, summary),
+                    h('div.hint', message));
+            }
+        };
+    }
+
     function fieldDefs() {
         /* Trusted Server Certificates: a button + summary that opens the Certificate
            Picker modal (Swing parity), folding the System Truststore flag and the
@@ -567,8 +621,7 @@ function TlsConnectorPanel({ getEntry, setEntry, connector, onChange }) {
             /* server mode (listener side) */
             ...(server ? [
                 { section: 'Server Identity', visible: enabled },
-                certPickerField('serverCertificateAlias', 'Server Certificate',
-                    'Certificate presented to connecting clients (required)'),
+                serverCertificateField(),
                 {
                     key: 'clientAuthMode', label: 'Client Authentication', type: 'radio',
                     options: CLIENT_AUTH_MODES, refresh: true, visible: enabled

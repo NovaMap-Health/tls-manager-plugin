@@ -15,11 +15,12 @@ if (params.get('view') === 'manager') {
     const transport = params.get('transport') || 'TCP Sender';
     const def = platform.connectorDefs.get(transport);
     const connector = { transportName: transport, properties: def.defaults('4.5.2') };
-    connector.properties.serverMode = false;
+    connector.properties.serverMode = params.has('server');
     connector.properties.remoteAddress = 'localhost';
     connector.properties.remotePort = '443';
     const tls = platform.tlsDef.defaults('4.5.2');
     tls.isTlsManagerEnabled = true;
+    tls.serverCertificateAlias = params.get('saved') || null;
     if (params.has('unknown')) {
         tls.isUseServerDefaultProtocols = false;
         tls.usedProtocols = { string: ['TLSv1.1', 'TLSv1.2'] };

@@ -17465,43 +17465,77 @@ function openMultiPicker({ title, options, selected, useServerDefault, onApply }
     ]
   });
 }
-function openCertPicker({ title, aliases, current, onApply }) {
+function openCertPicker({ title, aliases, current, onApply, required = false }) {
   let chosen = current || "";
   const name = "tlscertpick-" + Math.random().toString(36).slice(2);
-  const filterInput = textInput("", { placeholder: "Filter\u2026", style: { flex: "1" } });
-  const listWrap = h("div", { style: { maxHeight: "320px", overflow: "auto", border: "1px solid var(--line)", borderRadius: "4px", marginTop: "8px" } });
+  const filterInput = textInput("", { id: `${name}-filter`, placeholder: "Filter\u2026", style: { flex: "1", minWidth: "0" } });
+  const rows = h("tbody");
+  const error = h("div.hint", { role: "alert", hidden: true }, "Select a certificate before clicking OK.");
+  const listWrap = h("div", { style: {
+    height: required ? "min(420px, 50vh)" : void 0,
+    maxHeight: required ? void 0 : "320px",
+    overflow: "auto",
+    border: "1px solid var(--line)",
+    marginTop: "8px"
+  } }, h(
+    "table",
+    { style: { width: "100%", borderCollapse: "collapse" } },
+    h("thead", h(
+      "tr",
+      h("th", { scope: "col", "aria-label": "Selection", style: { width: "32px" } }),
+      h("th", { scope: "col", style: { textAlign: "center" } }, "Options")
+    )),
+    rows
+  ));
   function build() {
-    clear(listWrap);
+    clear(rows);
     const f = filterInput.value.trim().toLowerCase();
-    const noneBox = h("input", { type: "radio", name, checked: !chosen });
-    noneBox.addEventListener("change", () => {
-      chosen = "";
-    });
-    listWrap.appendChild(pickRow(noneBox, "<None>"));
-    for (const a of aliases) {
-      if (f && !a.toLowerCase().includes(f)) continue;
-      const box = h("input", { type: "radio", name, checked: chosen === a });
+    const options = required ? aliases : ["", ...aliases];
+    for (const [index, alias] of options.entries()) {
+      if (alias && f && !alias.toLowerCase().includes(f)) continue;
+      const id = `${name}-${index}`;
+      const box = h("input", { id, type: "radio", name, checked: chosen === alias });
       box.addEventListener("change", () => {
-        chosen = a;
+        chosen = alias;
+        error.hidden = true;
       });
-      listWrap.appendChild(pickRow(box, a));
+      rows.appendChild(h(
+        "tr",
+        h("td", { style: { width: "32px", textAlign: "center" } }, box),
+        h("td", h("label", { for: id, style: { display: "block", cursor: "pointer" } }, alias || "<None>"))
+      ));
     }
+    if (!rows.children.length) rows.appendChild(h("tr", h("td", { colspan: 2 }, "No matching certificates.")));
   }
   build();
   filterInput.addEventListener("input", build);
+  const apply = {
+    label: "OK",
+    primary: true,
+    onClick: () => {
+      if (required && !aliases.includes(chosen)) {
+        error.hidden = false;
+        return false;
+      }
+      onApply(chosen || null);
+    }
+  };
   modal({
     title,
-    size: "wide",
     body: h(
-      "div",
-      { style: { minWidth: "420px" } },
-      h("div", { style: { display: "flex", alignItems: "center", gap: "10px" } }, h("label", "Filter:"), filterInput),
-      listWrap
+      "fieldset",
+      { style: { minWidth: "0", margin: "0", padding: "10px", border: "1px solid var(--line)" } },
+      h("legend", "TLS settings"),
+      h(
+        "div",
+        { style: { display: "flex", alignItems: "center", gap: "10px" } },
+        h("label", { for: `${name}-filter` }, "Filter:"),
+        filterInput
+      ),
+      listWrap,
+      error
     ),
-    buttons: [
-      { label: "Cancel" },
-      { label: "OK", primary: true, onClick: () => onApply(chosen || null) }
-    ]
+    buttons: [apply, { label: "Cancel" }]
   });
 }
 var JVM_TRUSTSTORE = "[JVM Truststore]";
@@ -17629,7 +17663,8 @@ function TlsConnectorPanel({ getEntry, setEntry, connector, onChange }) {
     trustedAliases: null,
     protocols: null,
     ciphers: null,
-    extMissing: false
+    extMissing: false,
+    localLoading: true
   });
   React.useEffect(() => {
     let cancelled = false;
@@ -17639,7 +17674,7 @@ function TlsConnectorPanel({ getEntry, setEntry, connector, onChange }) {
       api2.get("/server/protocolsAndCipherSuites")
     ]).then(([local, trusted, crypto]) => {
       if (cancelled) return;
-      const next = { localAliases: null, trustedAliases: null, protocols: null, ciphers: null, extMissing: false };
+      const next = { localAliases: null, trustedAliases: null, protocols: null, ciphers: null, extMissing: false, localLoading: false };
       if (local.status === "fulfilled") {
         next.localAliases = certList(local.value).map((c) => String(c.alias ?? "")).filter(Boolean);
       } else if (notInstalled(local.reason)) {
@@ -17732,6 +17767,46 @@ function TlsConnectorPanel({ getEntry, setEntry, connector, onChange }) {
           btn,
           summary,
           hint ? h("span.hint", { style: { marginLeft: "10px" } }, hint) : null
+        );
+      }
+    };
+  }
+  function serverCertificateField() {
+    const aliases = [...new Set(data.localAliases || [])].sort((a, b) => a.localeCompare(b));
+    const unavailable = data.localAliases === null;
+    const message = data.localLoading ? "Loading server certificates\u2026" : data.extMissing ? "TLS Manager engine plugin not detected. Install it, then reopen these settings." : unavailable ? "Unable to load server certificates. Reopen these settings to retry." : !aliases.length ? "No local certificates available. Import a key pair in TLS Manager, then reopen these settings." : "Certificate presented to connecting clients (required)";
+    return {
+      label: "Server Certificate",
+      type: "custom",
+      visible: enabled,
+      render: (p, { onChange: onChange2 }) => {
+        const summary = h("span", { style: { marginLeft: "8px", fontSize: "13px" } });
+        const repaint = () => {
+          const alias = p.serverCertificateAlias;
+          summary.textContent = alias ? `${alias}${!unavailable && !aliases.includes(alias) ? " (unavailable)" : ""}` : "None selected";
+        };
+        const btn = h("button.btn", {
+          type: "button",
+          disabled: unavailable || !aliases.length,
+          "data-fkey": "serverCertificateAlias",
+          style: { display: "inline-flex", alignItems: "center", gap: "6px" }
+        }, icon("settings"), "Edit\u2026");
+        btn.addEventListener("click", () => openCertPicker({
+          title: "Server Certificate Picker",
+          aliases,
+          current: p.serverCertificateAlias || "",
+          required: true,
+          onApply: (alias) => {
+            p.serverCertificateAlias = alias;
+            onChange2();
+            repaint();
+          }
+        }));
+        repaint();
+        return h(
+          "div",
+          h("div", { style: { display: "flex", alignItems: "center" } }, btn, summary),
+          h("div.hint", message)
         );
       }
     };
@@ -17831,11 +17906,7 @@ function TlsConnectorPanel({ getEntry, setEntry, connector, onChange }) {
       /* server mode (listener side) */
       ...server ? [
         { section: "Server Identity", visible: enabled },
-        certPickerField(
-          "serverCertificateAlias",
-          "Server Certificate",
-          "Certificate presented to connecting clients (required)"
-        ),
+        serverCertificateField(),
         {
           key: "clientAuthMode",
           label: "Client Authentication",

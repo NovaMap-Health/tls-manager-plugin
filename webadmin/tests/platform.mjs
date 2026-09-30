@@ -19,7 +19,8 @@ export const api = {
         }
         const store = storeFor[path.split('/').pop()];
         if (store) {
-            if (fixture.failStores.includes(store)) throw Object.assign(new Error(`${store} read failed`), { status: 500 });
+            if (store === 'private' && fixture.delayLocal) await new Promise(resolve => { window.resolveLocal = resolve; });
+            if (fixture.failStores.includes(store)) throw Object.assign(new Error(`${store} read failed`), { status: fixture.storeStatus || 500 });
             return { [wrapperFor(store)]: structuredClone(fixture.stores[store]) };
         }
         if (path === '/extensions/plugins') return { entry: [] };
