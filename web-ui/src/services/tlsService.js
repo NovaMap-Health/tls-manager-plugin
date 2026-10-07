@@ -11,6 +11,7 @@
  */
 
 import { parseCertificate, getSuggestedAlias } from '../utils/certificateUtils.js'
+import { getApiErrorMessage } from '../utils/apiErrorUtils.js'
 import { api } from './api.js'
 import { notificationService } from './notificationService.js'
 
@@ -206,7 +207,7 @@ export async function fetchRemoteCertificates(url) {
     
     return certificates
   } catch (error) {
-    const errorMessage = error.response?.data?.message || error.message || 'Failed to fetch remote certificates from server'
+    const errorMessage = getApiErrorMessage(error, 'Failed to fetch remote certificates from server')
     notificationService.showError(errorMessage)
     throw new Error(errorMessage)
   }
