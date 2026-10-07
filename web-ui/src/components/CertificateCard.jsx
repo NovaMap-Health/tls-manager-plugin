@@ -1,14 +1,13 @@
 import React from 'react'
-import { Paper, Box, Typography, Stack, Button, Divider, Chip, Tooltip } from '@mui/material'
+import { Paper, Box, Typography, Stack, Button, Divider, Tooltip } from '@mui/material'
 import ShieldOutlinedIcon from '@mui/icons-material/ShieldOutlined'
-import ImportExportOutlinedIcon from '@mui/icons-material/ImportExportOutlined'
 import EditOutlinedIcon from '@mui/icons-material/EditOutlined'
 import DeleteOutlinedIcon from '@mui/icons-material/DeleteOutlined'
 import StatusPill from './StatusPill'
 
-export default function CertificateCard({ certificate, onViewDetails, onExport, onEditAlias, onRemove, showPrivateKeys = false }) {
+export default function CertificateCard({ certificate, onViewDetails, onEditAlias, onRemove, showPrivateKeys = false }) {
   const {
-    name,
+    alias,
     type,
     subject,
     issuer,
@@ -40,7 +39,7 @@ export default function CertificateCard({ certificate, onViewDetails, onExport, 
                 <ShieldOutlinedIcon fontSize="small" />
               </Box>
               <Box sx={{ minWidth: 0, flex: 1, overflow: 'hidden' }}>
-                <Tooltip title={name} arrow placement="top">
+                <Tooltip title={alias} arrow placement="top">
                   <Typography 
                     variant="h6" 
                     sx={{ 
@@ -54,7 +53,7 @@ export default function CertificateCard({ certificate, onViewDetails, onExport, 
                       cursor: 'help'
                     }}
                   >
-                    {name}
+                    {alias}
                   </Typography>
                 </Tooltip>
                 <Typography variant="body2" color="text.secondary">{type}</Typography>
