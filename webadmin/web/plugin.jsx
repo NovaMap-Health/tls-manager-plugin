@@ -711,7 +711,7 @@ function certTableEl(certs, store, act) {
 }
 
 /* The keystore REST API returns certificates/keys as bare base64 (DER), but the
- * jsrsasign verify/parse path needs PEM (verifyCertificate rejects anything
+ * certificate verification path needs PEM (verifyCertificate rejects anything
  * without -----BEGIN-----). Wrap bare base64 in PEM headers, pass real PEM
  * through unchanged — mirrors the SPA's base64ToPem() before verification. */
 const toCertPem = (v) => (v && /-----BEGIN/.test(v)) ? v : (v ? base64ToPem(v) : v);
@@ -877,7 +877,7 @@ function renderVerification(container, res) {
  *     A native port of the plugin's standalone web UI (web-ui/ SPA): the
  *     Native (read-only) / Trusted / Local Key Pairs stores, with import
  *     (file + URL), edit-alias, delete, a details dialog, and client-side
- *     X.509 parsing (jsrsasign, bundled). Each change PUTs the whole store
+ *     X.509 parsing (PKI.js, bundled). Each change PUTs the whole store
  *     back to /api/tlsmanager/* and reloads, matching the SPA.
  * ====================================================================== */
 function TlsManagerPanel() {
@@ -892,6 +892,7 @@ function TlsManagerPanel() {
     const mountedRef = React.useRef(false);
     const loadRequestRef = React.useRef(0);
     const writePendingRef = React.useRef(false);
+    const verificationRequestsRef = React.useRef(new WeakMap());
 
     async function loadAll() {
         if (!mountedRef.current || writePendingRef.current) return;
@@ -1014,16 +1015,17 @@ function TlsManagerPanel() {
         }
         const verifyOut = h('div', { style: { marginTop: '10px' } });
         const verifyBtn = h('button.btn', { type: 'button' }, 'Verify Certificate');
-        verifyBtn.addEventListener('click', () => {
+        verifyBtn.addEventListener('click', async () => {
+            verifyBtn.disabled = true;
             clear(verifyOut);
             verifyOut.appendChild(h('div.text-text-faint', { style: { fontSize: '12px' } }, 'Verifying…'));
-            // Stored certs/keys are bare base64 (DER) — wrap to PEM so the jsrsasign
-            // verify path accepts them (it rejects anything without -----BEGIN-----).
             try {
-                const res = verifyCertificate(toCertPem(cert.rawCertificate), cert.rawPrivateKey ? toKeyPem(cert.rawPrivateKey) : null);
-                renderVerification(verifyOut, res || { success: false, error: 'No verification result' });
+                const res = await verifyCertificate(toCertPem(cert.rawCertificate), cert.rawPrivateKey ? toKeyPem(cert.rawPrivateKey) : null);
+                if (mountedRef.current && verifyOut.isConnected) renderVerification(verifyOut, res);
             } catch (err) {
-                renderVerification(verifyOut, { success: false, error: 'Verification failed: ' + err.message });
+                if (mountedRef.current && verifyOut.isConnected) renderVerification(verifyOut, { success: false, error: 'Verification failed: ' + err.message });
+            } finally {
+                verifyBtn.disabled = false;
             }
         });
         body.appendChild(h('div', { style: { marginTop: '12px', display: 'flex', alignItems: 'center', gap: '8px' } },
@@ -1075,12 +1077,20 @@ function TlsManagerPanel() {
      * `out` whenever a full PEM cert (and optional key) is present, mirroring the
      * SPA's auto-verify. Input here is already PEM (pasted / chain-extracted), so
      * no base64 wrapping is needed. */
-    function verifyInto(out, pem, key) {
+    async function verifyInto(out, pem, key) {
+        const request = {};
+        verificationRequestsRef.current.set(out, request);
         pem = (pem || '').trim();
         key = (key || '').trim();
-        if (!pem || !isValidPemCertificate(pem)) { clear(out); return; }
-        try { renderVerification(out, verifyCertificate(pem, key || null)); }
-        catch (e) { renderVerification(out, { success: false, error: e.message }); }
+        clear(out);
+        if (!pem || !isValidPemCertificate(pem)) return;
+        out.appendChild(h('div.text-text-faint', { style: { fontSize: '12px' } }, 'Verifying…'));
+        let res;
+        try { res = await verifyCertificate(pem, key || null); }
+        catch (e) { res = { success: false, error: e.message }; }
+        if (mountedRef.current && out.isConnected && verificationRequestsRef.current.get(out) === request) {
+            renderVerification(out, res);
+        }
     }
 
     function openImportFile(store) {
@@ -1093,13 +1103,16 @@ function TlsManagerPanel() {
         // Prefill the alias from the certificate's CN once a valid PEM is loaded
         // (matching Swing's importCertificate), unless the user typed their own.
         let autoAlias = '';
-        function suggestAlias() {
+        let aliasRevision = 0;
+        async function suggestAlias() {
+            const request = ++aliasRevision;
             const typed = aliasInput.value.trim();
             if (typed !== '' && typed !== autoAlias) return;   // keep a user-entered alias
             const pem = pemArea.value.trim();
             if (!pem || !isValidPemCertificate(pem)) return;
             let suggested = null;
-            try { suggested = getSuggestedAlias(parseCertificate(pem)); } catch { /* ignore parse errors */ }
+            try { suggested = getSuggestedAlias(await parseCertificate(pem)); } catch { /* ignore parse errors */ }
+            if (!mountedRef.current || !aliasInput.isConnected || request !== aliasRevision || pemArea.value.trim() !== pem || aliasInput.value.trim() !== typed) return;
             if (suggested) { aliasInput.value = suggested; autoAlias = suggested; }
         }
         const pickCert = h('button.btn.btn-sm', { type: 'button' }, 'Choose file…');
@@ -1126,10 +1139,13 @@ function TlsManagerPanel() {
                     if (!isValidPemCertificate(pemText)) { toast('Not a valid PEM certificate', 'error'); return false; }
                     if (store === 'private' && !isValidPemPrivateKey(privateKeyText)) { toast('Not a valid PEM private key', 'error'); return false; }
                     // Verify (chain + key match) before importing; let the user override on failure.
-                    let res; try { res = verifyCertificate(pemText, privateKeyText || null); } catch (e) { res = { success: false, error: e.message }; }
+                    const stillCurrent = () => body.isConnected && mountedRef.current && aliasInput.value.trim() === alias && pemArea.value.trim() === pemText && (keyArea ? keyArea.value.trim() : undefined) === privateKeyText;
+                    let res; try { res = await verifyCertificate(pemText, privateKeyText || null); } catch (e) { res = { success: false, error: e.message }; }
+                    if (!stillCurrent()) return false;
                     if (!res.success && !await confirmDialog('Verification failed', (res.error || 'Certificate verification failed') + '\n\nImport anyway?', { danger: true, okLabel: 'Import anyway' })) return false;
-                    if (!writableStore(store, state)) return false;
+                    if (!stillCurrent() || !writableStore(store, state)) return false;
                     if (storesRef.current[store].some((c) => (c.alias || '').toLowerCase() === alias.toLowerCase()) && !await confirmReplace(alias, store)) return false;
+                    if (!stillCurrent()) return false;
                     return writeStore(store, state, (current) => updateCertificates(store, { alias, pemText, privateKeyText }, current), 'Imported', 'Import failed');
                 }
             }]
@@ -1157,7 +1173,7 @@ function TlsManagerPanel() {
             selectedUrl = null;
             pending = false;
             rows.length = 0;
-            clear(listWrap); clear(verifyOut);
+            clear(listWrap); verifyInto(verifyOut, '');
             heading.style.display = 'none';
             listWrap.style.display = 'none';
             aliasInput.value = '';
@@ -1225,7 +1241,8 @@ function TlsManagerPanel() {
                         return false;
                     };
                     const pemText = selected.certificate;
-                    let res; try { res = verifyCertificate(toCertPem(pemText), null); } catch (e) { res = { success: false, error: e.message }; }
+                    let res; try { res = await verifyCertificate(toCertPem(pemText), null); } catch (e) { res = { success: false, error: e.message }; }
+                    if (!stillSelected() || !writableStore('trusted', state)) return false;
                     if (!res.success && !await confirmDialog('Verification failed', (res.error || 'Certificate verification failed') + '\n\nImport anyway?', { danger: true, okLabel: 'Import anyway' })) return false;
                     if (!stillSelected() || !writableStore('trusted', state)) return false;
                     if (storesRef.current.trusted.some((c) => (c.alias || '').toLowerCase() === alias.toLowerCase()) && !await confirmReplace(alias, 'trusted')) return false;
@@ -1249,16 +1266,22 @@ function TlsManagerPanel() {
         const verifyOut = h('div', { style: { marginTop: '2px' } });
         let parsed = [];
         let chosen = null;
+        let parseRevision = 0;
         const rows = [];
 
         const pickCert = h('button.btn.btn-sm', { type: 'button' }, 'Choose file…');
         const choose = (c) => { chosen = c; if (c.alias) aliasInput.value = c.alias; verifyInto(verifyOut, c.certificate, null); };
-        function reparse() {
+        async function reparse() {
+            const request = ++parseRevision;
             const text = pemArea.value.trim();
-            parsed = text ? parseCertificateChainFromPem(text) : [];
-            clear(listWrap); clear(verifyOut); rows.length = 0; chosen = null;
+            clear(listWrap); verifyInto(verifyOut, ''); rows.length = 0; chosen = null;
+            listWrap.style.display = 'none';
             if (!text) { foundMsg.style.display = 'none'; listWrap.style.display = 'none'; return; }
             foundMsg.style.display = 'block';
+            foundMsg.textContent = 'Parsing certificates…';
+            const result = await parseCertificateChainFromPem(text);
+            if (!mountedRef.current || !pemArea.isConnected || request !== parseRevision || pemArea.value.trim() !== text) return;
+            parsed = result;
             if (!parsed.length) { foundMsg.textContent = 'No valid certificates found in the provided text'; listWrap.style.display = 'none'; return; }
             foundMsg.textContent = `Found ${parsed.length} certificate${parsed.length > 1 ? 's' : ''} in the chain`;
             listWrap.style.display = 'flex';
@@ -1289,13 +1312,18 @@ function TlsManagerPanel() {
                     const state = writableStore('trusted');
                     if (!state) return false;
                     if (!chosen) { toast('Paste a chain and select a certificate', 'warn'); return false; }
+                    const selected = chosen;
+                    const request = parseRevision;
                     const certificate = chosen.certificate;
                     const alias = aliasInput.value.trim();
                     if (!alias) { toast('Alias is required', 'warn'); return false; }
-                    let res; try { res = verifyCertificate(certificate, null); } catch (e) { res = { success: false, error: e.message }; }
+                    const stillSelected = () => body.isConnected && mountedRef.current && request === parseRevision && chosen === selected && aliasInput.value.trim() === alias;
+                    let res; try { res = await verifyCertificate(certificate, null); } catch (e) { res = { success: false, error: e.message }; }
+                    if (!stillSelected()) return false;
                     if (!res.success && !await confirmDialog('Verification failed', (res.error || 'Certificate verification failed') + '\n\nImport anyway?', { danger: true, okLabel: 'Import anyway' })) return false;
-                    if (!writableStore('trusted', state)) return false;
+                    if (!stillSelected() || !writableStore('trusted', state)) return false;
                     if (storesRef.current.trusted.some((c) => (c.alias || '').toLowerCase() === alias.toLowerCase()) && !await confirmReplace(alias, 'trusted')) return false;
+                    if (!stillSelected()) return false;
                     return writeStore('trusted', state, (current) => updateCertificates('trusted', { alias, pemText: certificate }, current), 'Imported', 'Import failed');
                 }
             }]

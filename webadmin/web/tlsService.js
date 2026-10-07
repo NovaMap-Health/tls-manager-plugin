@@ -5,7 +5,7 @@
  * TLS Manager certificate service — ported from the standalone web-ui SPA's
  * tlsService to the web administrator's @oie api (replacing axios + the dev
  * internal store). Endpoints live at /api/tlsmanager/* (the plugin servlet's
- * @Path). Each list is enriched by parsing the PEM client-side (jsrsasign) so
+ * @Path). Each list is enriched by parsing the PEM client-side (PKI.js) so
  * the UI can show subject/issuer/validity/fingerprint exactly like the SPA.
  *
  * The engine stores the WHOLE store as one list, so create/edit/delete fetch (or

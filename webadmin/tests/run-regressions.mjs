@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { generateKeyPairSync, createHash } from 'node:crypto';
+import { createHash, X509Certificate } from 'node:crypto';
 import { createServer } from 'node:http';
 import { createRequire } from 'node:module';
 import { mkdtemp, readFile, writeFile, rm, mkdir } from 'node:fs/promises';
@@ -7,34 +7,26 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { build } from 'esbuild';
-import jsrsasign from 'jsrsasign';
+import { certificate } from './certificates.mjs';
 
 const dir = path.dirname(fileURLToPath(import.meta.url));
 const host = path.resolve(process.env.OIE_WEB_CLIENT_DIR || path.join(dir, '../../../oie-web-client'));
 const hostRequire = createRequire(path.join(host, 'package.json'));
 const { chromium, expect } = hostRequire('@playwright/test');
 const client = path.join(host, 'web-administrator/client');
-const temporary = await mkdtemp(path.join(tmpdir(), 'tls-webadmin-regressions-'));
 const results = [];
 let browser;
 let server;
 
-function certificate(name) {
-    const pair = generateKeyPairSync('rsa', { modulusLength: 2048 });
-    return new jsrsasign.KJUR.asn1.x509.Certificate({
-        version: 3, serial: { int: 1 }, sigalg: 'SHA256withRSA',
-        issuer: { str: `/CN=${name}` }, subject: { str: `/CN=${name}` },
-        notbefore: { str: '250101000000Z' }, notafter: { str: '491231235959Z' },
-        sbjpubkey: pair.publicKey.export({ type: 'spki', format: 'pem' }),
-        cakey: pair.privateKey.export({ type: 'pkcs8', format: 'pem' })
-    }).getPEM();
-}
-const certificates = { 'a.example': certificate('a.example'), 'b.example': certificate('b.example') };
+const rsa = await certificate('a.example');
+const ec = await certificate('b.example', { type: 'EC' });
+const certificates = { 'a.example': rsa.pem, 'b.example': ec.pem };
 const fixture = overrides => ({
     certificates, failStores: [], failPut: false, failRefreshAfterPut: false,
     stores: { native: [], trusted: [{ alias: 'existing', certificate: certificates['a.example'] }], private: [] },
     ...overrides
 });
+const temporary = await mkdtemp(path.join(tmpdir(), 'tls-webadmin-regressions-'));
 
 try {
     await build({
@@ -64,6 +56,7 @@ try {
     const base = `http://127.0.0.1:${server.address().port}`;
 
     async function check(name, query, overrides, fn) {
+        if (process.env.TLS_TEST_FILTER && !name.includes(process.env.TLS_TEST_FILTER)) return;
         const context = await browser.newContext();
         const page = await context.newPage();
         page.setDefaultTimeout(7000);
@@ -78,8 +71,10 @@ try {
             results.push({ name, status: 'pass' });
             console.log(`PASS ${name}`);
         } catch (error) {
-            results.push({ name, status: 'fail', error: error.stack, pageErrors: errors });
+            const pendingDigests = await page.evaluate(() => window.delayedCrypto?.count());
+            results.push({ name, status: 'fail', error: error.stack, pageErrors: errors, pendingDigests });
             console.error(`FAIL ${name}: ${error.message}`);
+            if (pendingDigests !== undefined) console.error(`Delayed digest calls: ${pendingDigests}`);
         } finally { await context.close(); }
     }
 
@@ -105,6 +100,194 @@ try {
         await page.evaluate(({ index, alias }) => window.testApi.resolveRemote(index, alias), { index, alias });
         await expect(dialog.locator('input[type="text"]').nth(1)).toHaveValue(alias);
     };
+
+    const pauseDigests = page => page.evaluate(() => {
+        const digest = crypto.subtle.digest.bind(crypto.subtle);
+        const pending = [];
+        let paused = true;
+        crypto.subtle.digest = (...args) => {
+            const result = digest(...args);
+            // Delay certificate hashes only; unrelated browser hashing proceeds.
+            const data = args[1] instanceof ArrayBuffer ? new Uint8Array(args[1]) : args[1];
+            return paused && data[0] === 0x30
+                ? new Promise((resolve, reject) => pending.push(() => result.then(resolve, reject))) : result;
+        };
+        window.delayedCrypto = {
+            count: () => pending.length,
+            async release(indices = pending.map((_, i) => i)) {
+                paused = false;
+                await Promise.all(indices.map(i => pending[i]()));
+                await new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+            }
+        };
+    });
+
+    // Dispatch exactly one edit while crypto is paused, so completion ordering
+    // does not depend on the browser's native multiline fill event sequence.
+    const editOnce = (input, value) => input.evaluate((element, next) => {
+        element.value = next;
+        element.dispatchEvent(new Event('input', { bubbles: true }));
+    }, value);
+
+    const verificationMessage = 'Certificate verification completed successfully';
+
+    await check('Invalid stored certificate still shows an error when explicitly verified', 'view=manager', {
+        stores: { native: [], trusted: [{ alias: 'broken', certificate: 'not a certificate' }], private: [] }
+    }, async page => {
+        await page.getByRole('button', { name: 'Details', exact: true }).click();
+        const dialog = page.getByRole('dialog');
+        await dialog.getByRole('button', { name: 'Verify Certificate', exact: true }).click();
+        await expect(dialog.getByText('Invalid certificate. Make sure the file is a .pem.', { exact: true })).toBeVisible();
+        await expect(dialog.getByRole('button', { name: 'Verify Certificate', exact: true })).toBeEnabled();
+    });
+
+    for (const [name, fixture] of [['RSA', rsa], ['EC', ec]]) {
+        await check(`${name}: stored DER details and private-key verification render correctly`, 'view=manager', {
+            stores: { native: [], trusted: [], private: [{
+                alias: 'stored-key', certificate: new X509Certificate(fixture.pem).raw.toString('base64'),
+                key: fixture.privateKeyPem.replace(/-----[^\n]+-----|\s/g, '')
+            }] }
+        }, async page => {
+            await page.getByRole('button', { name: /^Local Key Pairs/ }).click();
+            await page.getByRole('button', { name: 'Details', exact: true }).click();
+            const dialog = page.getByRole('dialog');
+            await expect(dialog.getByText(`CN=${name === 'RSA' ? 'a.example' : 'b.example'}`, { exact: true })).toHaveCount(2);
+            await expect(dialog.getByText(new X509Certificate(fixture.pem).fingerprint, { exact: true })).toBeVisible();
+            await dialog.getByRole('button', { name: 'Verify Certificate', exact: true }).click();
+            await expect(dialog.getByText(verificationMessage, { exact: true })).toBeVisible();
+            await expect(dialog.getByText('Private Key Validation Passed', { exact: true })).toBeVisible();
+        });
+    }
+
+    for (const [name, fixture, key] of [
+        ['RSA PKCS#1', rsa, rsa.legacyKeyPem], ['EC PKCS#8', ec, ec.privateKeyPem], ['EC SEC1', ec, ec.legacyKeyPem]
+    ]) {
+        await check(`${name}: key-pair import verifies before saving once`, 'view=manager', {}, async page => {
+            await page.getByRole('button', { name: /^Local Key Pairs/ }).click();
+            await page.getByRole('button', { name: 'Import Key Pair', exact: true }).click();
+            const dialog = page.getByRole('dialog', { name: 'Import Key Pair', exact: true });
+            await dialog.locator('input').fill('new-key');
+            await dialog.locator('textarea').nth(0).fill(fixture.pem);
+            await dialog.locator('textarea').nth(1).fill(key);
+            await expect(dialog.getByText('Private Key Validation Passed', { exact: true })).toBeVisible();
+            await dialog.getByRole('button', { name: 'Import', exact: true }).click();
+            await expect(dialog).toHaveCount(0);
+            assert.deepEqual((await puts(page)).map(r => r.body.list.localCertificate), [[{ alias: 'new-key', certificate: fixture.pem.trim(), key: key.trim() }]]);
+        });
+    }
+
+    await check('Mismatched private key requires explicit override; cancellation writes nothing', 'view=manager', {}, async page => {
+        await page.getByRole('button', { name: /^Local Key Pairs/ }).click();
+        await page.getByRole('button', { name: 'Import Key Pair', exact: true }).click();
+        const dialog = page.getByRole('dialog', { name: 'Import Key Pair', exact: true });
+        await dialog.locator('input').fill('mismatch');
+        await dialog.locator('textarea').nth(0).fill(rsa.pem);
+        await dialog.locator('textarea').nth(1).fill(ec.privateKeyPem);
+        await expect(dialog.getByText('Certificate does not match private key.', { exact: true })).toBeVisible();
+        await dialog.getByRole('button', { name: 'Import', exact: true }).click();
+        const warning = page.getByRole('dialog', { name: 'Verification failed', exact: true });
+        await expect(warning).toBeVisible();
+        await warning.getByRole('button', { name: 'Cancel', exact: true }).click();
+        assert.deepEqual(await puts(page), []);
+    });
+
+    await check('Delayed alias suggestions cannot overwrite newer certificates or a typed alias', 'view=manager', {}, async page => {
+        await page.getByRole('button', { name: 'Import Certificate', exact: true }).click();
+        const dialog = page.getByRole('dialog');
+        await pauseDigests(page);
+        await editOnce(dialog.locator('textarea'), rsa.pem);
+        await page.waitForFunction(() => window.delayedCrypto.count() === 2);
+        await editOnce(dialog.locator('textarea'), ec.pem);
+        await page.waitForFunction(() => window.delayedCrypto.count() === 4);
+        await page.evaluate(() => window.delayedCrypto.release([2, 3]));
+        await expect(dialog.locator('input')).toHaveValue('b.example');
+        await dialog.locator('input').fill('my-alias');
+        await page.evaluate(() => window.delayedCrypto.release([0, 1]));
+        await expect(dialog.locator('input')).toHaveValue('my-alias');
+        await expect(dialog.getByText(verificationMessage, { exact: true })).toBeVisible();
+    });
+
+    await check('Old successful verification cannot replace a newer key mismatch or cleared input', 'view=manager', {}, async page => {
+        await page.getByRole('button', { name: /^Local Key Pairs/ }).click();
+        await page.getByRole('button', { name: 'Import Key Pair', exact: true }).click();
+        const dialog = page.getByRole('dialog');
+        await dialog.locator('input').fill('custom');
+        await dialog.locator('textarea').nth(1).fill(rsa.privateKeyPem);
+        await pauseDigests(page);
+        await editOnce(dialog.locator('textarea').nth(0), rsa.pem);
+        await editOnce(dialog.locator('textarea').nth(0), ec.pem);
+        await page.waitForFunction(() => window.delayedCrypto.count() === 2);
+        await page.evaluate(() => window.delayedCrypto.release([1]));
+        await expect(dialog.getByText('Certificate does not match private key.', { exact: true })).toBeVisible();
+        await page.evaluate(() => window.delayedCrypto.release([0]));
+        await expect(dialog.getByText(verificationMessage, { exact: true })).toHaveCount(0);
+        await pauseDigests(page);
+        await editOnce(dialog.locator('textarea').nth(0), rsa.pem);
+        await page.waitForFunction(() => window.delayedCrypto.count() === 1);
+        await editOnce(dialog.locator('textarea').nth(0), '');
+        await page.evaluate(() => window.delayedCrypto.release());
+        await expect(dialog.getByText(verificationMessage, { exact: true })).toHaveCount(0);
+        assert.deepEqual(await puts(page), []);
+    });
+
+    await check('Chain preview ignores older parse completion and imports only the current selection', 'view=manager', {}, async page => {
+        await page.getByRole('button', { name: 'Import Chain', exact: true }).click();
+        const dialog = page.getByRole('dialog');
+        await pauseDigests(page);
+        await editOnce(dialog.locator('textarea'), rsa.pem + ec.pem);
+        await editOnce(dialog.locator('textarea'), ec.pem);
+        await page.waitForFunction(() => window.delayedCrypto.count() === 2);
+        await page.evaluate(() => window.delayedCrypto.release([1]));
+        await expect(dialog.getByRole('radio')).toHaveCount(1);
+        await expect(dialog.locator('input[type="text"]')).toHaveValue('b.example');
+        await page.evaluate(() => window.delayedCrypto.release([0]));
+        await expect(dialog.getByRole('radio')).toHaveCount(1);
+        await dialog.getByRole('button', { name: 'Import', exact: true }).click();
+        await expect(dialog).toHaveCount(0);
+        const writes = await puts(page);
+        assert.equal(writes.length, 1);
+        assert.equal(writes[0].body.list.trustedCertificate.at(-1).certificate, ec.pem.trim());
+    });
+
+    for (const source of ['file', 'URL', 'chain']) {
+        await check(`${source}: changing input during import verification prevents a stale write`, 'view=manager', {}, async page => {
+            let dialog;
+            if (source === 'file') dialog = await openImport(page);
+            if (source === 'URL') {
+                dialog = await openUrl(page);
+                await fetchUrl(page, dialog, 'https://b.example', 1);
+                await resolveRemote(page, dialog, 0, 'b.example');
+            }
+            if (source === 'chain') {
+                await page.getByRole('button', { name: 'Import Chain', exact: true }).click();
+                dialog = page.getByRole('dialog');
+                await dialog.locator('textarea').fill(ec.pem);
+            }
+            await expect(dialog.getByText(verificationMessage, { exact: true })).toBeVisible();
+            await pauseDigests(page);
+            await dialog.getByRole('button', { name: 'Import', exact: true }).click();
+            await page.waitForFunction(() => window.delayedCrypto.count() === 1);
+            // The host locks controls while pending; simulate another caller's
+            // edit to exercise the plugin's own post-await snapshot check.
+            await dialog.locator('input[type="text"]').last().evaluate(input => { input.value = 'changed-alias'; });
+            await page.evaluate(() => window.delayedCrypto.release());
+            await expect(dialog).not.toHaveAttribute('aria-busy', 'true');
+            assert.deepEqual(await puts(page), []);
+            await expect(dialog).toBeVisible();
+        });
+    }
+
+    await check('Closing a chain dialog during parsing discards the pending result', 'view=manager', {}, async page => {
+        await page.getByRole('button', { name: 'Import Chain', exact: true }).click();
+        const dialog = page.getByRole('dialog');
+        await pauseDigests(page);
+        await editOnce(dialog.locator('textarea'), rsa.pem + ec.pem);
+        await page.waitForFunction(() => window.delayedCrypto.count() === 1);
+        await dialog.getByRole('button', { name: 'Cancel', exact: true }).click();
+        await page.evaluate(() => window.delayedCrypto.release());
+        await expect(page.getByRole('dialog')).toHaveCount(0);
+        assert.deepEqual(await puts(page), []);
+    });
 
     const serverPicker = page => page.locator('#tls button[data-fkey="serverCertificateAlias"]');
     const serverSummary = page => serverPicker(page).locator('..').locator('span').last();
