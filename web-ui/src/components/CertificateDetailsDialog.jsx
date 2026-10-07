@@ -106,7 +106,7 @@ export default function CertificateDetailsDialog({ open, onClose, certificate })
         ? base64ToPrivateKeyPem(certificate.rawPrivateKey) 
         : null
       
-      const result = verifyCertificate(pemCertificate, privateKeyPem)
+      const result = await verifyCertificate(pemCertificate, privateKeyPem)
       setVerificationResult(result)
     } catch (error) {
       setVerificationResult({

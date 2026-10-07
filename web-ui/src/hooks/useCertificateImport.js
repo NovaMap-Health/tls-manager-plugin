@@ -97,7 +97,7 @@ export const useCertificateImport = (targetStore, currentCertificates = null) =>
     }
 
     try {
-      const details = parseCertificate(pemText)
+      const details = await parseCertificate(pemText)
       setCertificateDetails(details)
       
       // Clear any previous errors

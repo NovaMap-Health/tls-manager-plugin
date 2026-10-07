@@ -214,3 +214,36 @@ A React-based certificate management dashboard built with Vite, Material-UI, and
 ---
 
 *This specification document provides a comprehensive overview of the Settings Dashboard project, covering architecture, features, implementation details, and development guidelines.*
+
+---
+
+## 2026-05-12 - Replace jsrsasign with pkijs
+
+**Decision:** Replaced the now-EOL `jsrsasign` library with `pkijs` + `asn1js` + the browser's Web Crypto API (`crypto.subtle`).
+
+**Why:**
+- `jsrsasign` reached end-of-support on 2026-Apr-10 with unfixed open vulnerabilities; staying on it is no longer viable.
+- `pkijs` (by PeculiarVentures) covers everything we use today (X.509 parsing, chain verification, private-key matching) AND the upcoming **OCSP / CRL** feature work, so we avoid bringing in a second PKI dependency later.
+- Web Crypto handles all hashing and signing/verification natively, with no JS-implemented crypto primitives.
+
+**Affected files:**
+- New: `web-ui/src/utils/pkiHelpers.js` - PEM<->DER, OID-to-name maps, KeyUsage bit decoding, SAN flattening, RSA modulus bit-length, EC curve detection, private key import for PKCS#8 / PKCS#1 / SEC1.
+- Rewritten: `web-ui/src/utils/certificateUtils.js`, `web-ui/src/utils/verificationUtils.js`.
+- Patched: `web-ui/src/components/CertificateDetailsDialog.jsx`, `web-ui/src/components/ImportCertificateChainDialogContent.jsx`, `web-ui/src/hooks/useCertificateImport.js` - now `await` the previously-sync `verifyCertificate`, `parseCertificate`, `parseCertificateChainFromPem`.
+- `web-ui/package.json` - removed `jsrsasign`, added `pkijs`, `asn1js`, `pvutils`.
+
+**Behavioral changes:**
+- `parseCertificate`, `parseCertificateChainFromPem`, `verifyCertificate`, `validateCertificateChain`, `validatePrivateKey`, `getFingerprint` are now `async`. `isValidPemCertificate` and `isValidPemPrivateKey` remain sync (structural validation only).
+- **DSA private keys are no longer supported.** Web Crypto cannot import or sign with DSA. The PEM header is rejected by `isValidPemPrivateKey`, and any path that reaches `importPrivateKeyFromPem` throws a clear `"DSA private keys are not supported in this environment"` error. DSA was never a product requirement (no fixtures, tests, or product flows used it), only a side-effect of `jsrsasign`'s capabilities.
+- Supported private key formats: PKCS#8 (`-----BEGIN PRIVATE KEY-----`), PKCS#1 RSA (`-----BEGIN RSA PRIVATE KEY-----`), SEC1 EC (`-----BEGIN EC PRIVATE KEY-----`, with or without a preceding `EC PARAMETERS` block as emitted by OpenSSL).
+- Supported public key algorithms in certificates: RSA (`RSASSA-PKCS1-v1_5` with SHA-256) and ECDSA on P-256 / P-384 / P-521.
+
+**Future work covered by the same dependency:**
+- OCSP responder check via `pkijs.OCSPRequest` / `OCSPResponse`, AIA URL discovery from extension OID `1.3.6.1.5.5.7.1.1`.
+- CRL distribution-point check via `pkijs.CertificateRevocationList`, URLs from extension OID `2.5.29.31`.
+- Both will live in a new `web-ui/src/utils/revocationUtils.js` and reuse the `pkijs.Certificate` instances already produced by `parseCertificateChain`.
+
+**Cryptography (replaces the original entry on line 15):**
+- `pkijs` + `asn1js` for X.509 / PKI structure handling
+- `crypto.subtle` (Web Crypto) for all hashing, signing, verification, and key import
+- Supports RSA and ECDSA. DSA and Ed25519 are not supported in this environment.
