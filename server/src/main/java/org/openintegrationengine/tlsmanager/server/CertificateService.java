@@ -35,13 +35,22 @@ import org.openintegrationengine.tlsmanager.shared.properties.TLSConnectorProper
 
 import javax.net.ssl.HttpsURLConnection;
 import javax.net.ssl.SSLContext;
+import javax.net.ssl.SSLException;
 import javax.net.ssl.TrustManager;
 import javax.net.ssl.X509TrustManager;
+import javax.ws.rs.WebApplicationException;
+import javax.ws.rs.core.MediaType;
+import javax.ws.rs.core.Response;
 import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.io.StringReader;
+import java.net.ConnectException;
+import java.net.MalformedURLException;
+import java.net.NoRouteToHostException;
+import java.net.SocketTimeoutException;
 import java.net.URL;
+import java.net.UnknownHostException;
 import java.security.InvalidKeyException;
 import java.security.Key;
 import java.security.KeyFactory;
@@ -65,6 +74,7 @@ import java.util.Collections;
 import java.util.Enumeration;
 import java.util.HashSet;
 import java.util.List;
+import java.util.Locale;
 import java.util.Set;
 import java.util.function.BiConsumer;
 
@@ -426,6 +436,16 @@ public final class CertificateService {
     }
 
     public List<TrustedCertificate> retrieveRemoteCertificates(String urlString) {
+        if (urlString == null || urlString.isBlank()) {
+            throw remoteCertificateError(Response.Status.BAD_REQUEST, "URL is required.");
+        }
+        if (!urlString.toLowerCase(Locale.ROOT).startsWith("https://")) {
+            throw remoteCertificateError(
+                Response.Status.BAD_REQUEST,
+                "URL must use HTTPS. Plain HTTP endpoints cannot provide TLS certificates."
+            );
+        }
+
         List<TrustedCertificate> result = new ArrayList<>();
         HttpsURLConnection conn = null;
 
@@ -463,14 +483,114 @@ public final class CertificateService {
                     result.add(certificate);
                 }
             }
+        } catch (ClassCastException e) {
+            throw remoteCertificateError(
+                Response.Status.BAD_REQUEST,
+                "URL must use HTTPS. Plain HTTP endpoints cannot provide TLS certificates."
+            );
         } catch (IOException | CertificateEncodingException | KeyManagementException | NoSuchAlgorithmException e) {
-            throw new RuntimeException(e);
+            throw remoteCertificateError(
+                statusForRemoteCertificateFailure(e),
+                describeRemoteCertificateFailure(urlString, e)
+            );
         } finally {
             if (conn != null) {
                 conn.disconnect();
             }
         }
         return result;
+    }
+
+    private static WebApplicationException remoteCertificateError(Response.Status status, String message) {
+        return new WebApplicationException(
+            Response.status(status)
+                .entity(message)
+                .type(MediaType.TEXT_PLAIN)
+                .build()
+        );
+    }
+
+    private static Response.Status statusForRemoteCertificateFailure(Throwable error) {
+        if (hasCause(error, SocketTimeoutException.class)) {
+            return Response.Status.GATEWAY_TIMEOUT;
+        }
+        if (hasCause(error, MalformedURLException.class)) {
+            return Response.Status.BAD_REQUEST;
+        }
+        return Response.Status.BAD_GATEWAY;
+    }
+
+    private static String describeRemoteCertificateFailure(String urlString, Throwable error) {
+        String host = extractHost(urlString);
+
+        UnknownHostException unknownHost = findCause(error, UnknownHostException.class);
+        if (unknownHost != null) {
+            String unresolved = unknownHost.getMessage() != null ? unknownHost.getMessage() : host;
+            return "Could not resolve host \"" + unresolved + "\". Check that the hostname is correct.";
+        }
+
+        if (hasCause(error, SocketTimeoutException.class)) {
+            return "Timed out while connecting to \"" + host + "\". The server may be unreachable or too slow to respond.";
+        }
+
+        if (hasCause(error, ConnectException.class)) {
+            return "Connection refused by \"" + host + "\". The host may be down or not accepting HTTPS connections.";
+        }
+
+        if (hasCause(error, NoRouteToHostException.class)) {
+            return "No network route to host \"" + host + "\".";
+        }
+
+        SSLException sslException = findCause(error, SSLException.class);
+        if (sslException != null) {
+            String detail = sslException.getMessage();
+            return "TLS connection to \"" + host + "\" failed" + (detail != null && !detail.isBlank() ? ": " + detail : ".");
+        }
+
+        MalformedURLException malformed = findCause(error, MalformedURLException.class);
+        if (malformed != null) {
+            return "Invalid URL: " + malformed.getMessage();
+        }
+
+        String detail = rootMessage(error);
+        return "Failed to retrieve certificates from \"" + host + "\""
+            + (detail != null && !detail.isBlank() ? ": " + detail : ".");
+    }
+
+    private static String extractHost(String urlString) {
+        try {
+            String host = new URL(urlString).getHost();
+            return host != null && !host.isBlank() ? host : urlString;
+        } catch (MalformedURLException e) {
+            return urlString;
+        }
+    }
+
+    private static boolean hasCause(Throwable error, Class<? extends Throwable> type) {
+        return findCause(error, type) != null;
+    }
+
+    private static <T extends Throwable> T findCause(Throwable error, Class<T> type) {
+        Throwable current = error;
+        while (current != null) {
+            if (type.isInstance(current)) {
+                return type.cast(current);
+            }
+            Throwable next = current.getCause();
+            if (next == current) {
+                break;
+            }
+            current = next;
+        }
+        return null;
+    }
+
+    private static String rootMessage(Throwable error) {
+        Throwable current = error;
+        while (current.getCause() != null && current.getCause() != current) {
+            current = current.getCause();
+        }
+        return current.getMessage() != null ? current.getMessage() : current.toString();
     }
 
     public ConnectionTestResult testTcpConnection(
