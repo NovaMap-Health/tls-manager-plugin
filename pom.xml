@@ -11,7 +11,7 @@
 
     <groupId>org.openintegrationengine</groupId>
     <artifactId>tlsmanager</artifactId>
-    <version>1.0.8</version>
+    <version>1.0.9</version>
     <packaging>pom</packaging>
 
     <licenses>
@@ -56,7 +56,7 @@
 
         <!-- Plugin details -->
         <mirth.plugin.author>NovaMap Health</mirth.plugin.author>
-        <mirth.plugin.compatible_versions>4.5.2,4.6.0</mirth.plugin.compatible_versions>
+        <mirth.plugin.compatible_versions>4.5.2,4.6.0,4.7.0</mirth.plugin.compatible_versions>
         <mirth.plugin.description>TLS-enabled networking Connectors &amp; Certificate Management</mirth.plugin.description>
         <mirth.plugin.name>TLS Manager</mirth.plugin.name>
         <mirth.plugin.path>tls-manager</mirth.plugin.path>
