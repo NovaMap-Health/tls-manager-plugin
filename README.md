@@ -42,11 +42,27 @@ Once the plugin is installed, you will see additional options in the Connectors 
 
 As already mentioned, there are some environment variables that can be tweaked, however they have sensible defaults so that plugin will work out-of-the-box. The default persistence mechanism for the keystore is the OIE DB.
 
-The user guide can be downloaded from the [NovaMap Health website](https://www.novamap.health/products/open-integration-engine).
+The user guide can be downloaded from the [NovaMap Health website](https://www.novamap.health/tls-plugin).
 
 # Known issues and limitations
 
-Over the course of the project identified a few features that we have taken note of but decided are not necessary for an MVP and so can be picked up at a later date. Our intention is to record these in GitHub soon.   
+Over the course of the project identified a few features that we have taken note of but decided are not necessary for an MVP and so can be picked up at a later date. The list includes:
+- Generate Key Pairs
+- Export Certificates
+- CSR Management
+  - Generate CSR (PEM)
+  - Export and import signed CA replies
+- File Connectors support
+  - File Reader (FTP/FTPS)
+  - File Writer (FTP/FTPS)
+  - Explicit & Implicit FTPS modes
+- Certificate expiry warnings
+  - Configurable login warnings
+- Backup export
+  - .mks file containing all certs, aliases & key pairs
+- Restore from backup
+  - Import exported .mks file
+
 There are a small number of known issues which aren’t substantial enough to warrant delaying the release, but are significant enough to make you aware of. They have been recorded in the GitHub Issues page.
 
 # Architectural and Other Non-Functional Requirements
@@ -61,11 +77,11 @@ We set the following architectural and non-functional requirements for the proje
 * The global settings manager should be in static JS form so that it can be served by any web server, but it will be packaged with the plugin so that each OIE instance can be self-contained.  
 * It will be necessary for the user to authenticate themselves using OIE’s existing stored credentials before being able to access the global settings.  
 * Certificates are associated with channels by their alias.  
-* Although only tested with OIE 4.5.2, nothing should prevent the plugin from working with other compatible products that implement the same API.
+* Although developed using OIE 4.5.2, nothing should prevent the plugin from working with other compatible products that implement the same API.
 
 # Testing Regime
 
-### We have developed and tested it against the current main branch of OIE 4.5.2. 
+### We continuously test the TLS Manager plugin against the latest version of OIE.
 
 The testing regime took on a life of its own in this project\! The UX testing was relatively straightforward, but verifying the correct operation of all the functionality across all 6 senders and receivers, including mocking CRL and OSCP endpoints was much more than we had anticipated; there are now over 400 integration test cases that have been written to ensure correct operation. Indeed the creation of the automated integration test framework (using K8s, Caddy, Zephyr and JIRA) became a significant engineering project in its own right, but we took the view that it was important to invest now in order to reduce maintenance effort down the line and also to demonstrate that we take quality and security exceptionally importantly.
 
