@@ -45,6 +45,9 @@ public class TLSServicePlugin implements ServicePlugin {
     @Getter
     private WebServiceService webServiceService;
 
+    @Getter
+    private HttpRequestService httpRequestService;
+
     private TLSPluginConfiguration tlsPluginConfiguration;
 
     @Override
@@ -63,6 +66,8 @@ public class TLSServicePlugin implements ServicePlugin {
             socketFactoryService,
             new TemplateValueReplacer()
         );
+
+        this.httpRequestService = new HttpRequestService(socketFactoryService);
 
         if (extensionController.isExtensionEnabled("HTTP Sender")
             || extensionController.isExtensionEnabled("HTTP Listener")) {
@@ -131,10 +136,12 @@ public class TLSServicePlugin implements ServicePlugin {
     @Override
     public void start() {
         this.certificateService.init(tlsPluginConfiguration);
+        this.httpRequestService.start();
     }
 
     @Override
     public void stop() {
+        if (httpRequestService != null) httpRequestService.close();
     }
 
     public static TLSServicePlugin getPluginInstance() {
