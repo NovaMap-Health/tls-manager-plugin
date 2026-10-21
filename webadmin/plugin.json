@@ -1,0 +1,8 @@
+{
+    "id": "tls-manager",
+    "name": "TLS Manager",
+    "version": "1.0.7",
+    "author": "NovaMap Health",
+    "description": "TLS Settings section for supported connectors and a certificate management view for the TLS Manager engine plugin.",
+    "client": { "entry": "web/plugin.js" }
+}
