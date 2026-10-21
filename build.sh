@@ -46,6 +46,10 @@ function buildPlugin() {
   echo "########################################"
   mvn -N com.kaurpalang:mirth-plugin-maven-plugin:3.0.0:generate-plugin-xml -Dgit.hash="$shortHash"
 
+  # The upstream descriptor generator has no userutilPackages input. Extend its
+  # output from this checked-in build input, preserving all generated metadata.
+  java tools/PluginDescriptor.java register plugin.xml
+
   mv plugin.xml "$STAGING_DIR"
 
   echo "########################################"
@@ -54,6 +58,7 @@ function buildPlugin() {
   echo
   echo "########################################"
   cp {client,server,shared}/target/*.jar "$STAGING_DIR/"
+  java tools/PluginDescriptor.java verify "$STAGING_DIR"
 }
 
 function buildWebUi() {

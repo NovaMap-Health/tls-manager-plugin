@@ -23,6 +23,7 @@ import java.security.KeyManagementException;
 import java.security.KeyStoreException;
 import java.security.NoSuchAlgorithmException;
 import java.security.UnrecoverableKeyException;
+import java.util.Set;
 
 @Slf4j
 public class SocketFactoryService {
@@ -41,6 +42,25 @@ public class SocketFactoryService {
     public SSLConnectionSocketFactory getConnectorSocketFactory(TLSConnectorProperties properties) {
         var contextContainer = generateTLSContextSender(properties);
         return getConnectorSocketFactory(contextContainer);
+    }
+
+    /**
+     * Creates a request-owned HTTP-helper context. A null client alias explicitly
+     * disables client authentication; no connector context or TLS session is reused.
+     */
+    public SSLConnectionSocketFactory getHttpHelperSocketFactory(String clientAlias,
+            boolean trustSystemTruststore, Set<String> trustedServerCertificates) {
+        if (certificateService == null || configurationController == null) {
+            throw new HttpTlsConfigurationException("TLS Manager certificate services are unavailable");
+        }
+        var material = certificateService.snapshotHttpHelperTls(clientAlias,
+                trustSystemTruststore, trustedServerCertificates);
+        var protocols = MirthSSLUtil.getEnabledHttpsProtocols(configurationController.getHttpsServerProtocols());
+        var ciphers = MirthSSLUtil.getEnabledHttpsCipherSuites(configurationController.getHttpsCipherSuites());
+        if (protocols == null || protocols.length == 0 || ciphers == null || ciphers.length == 0) {
+            throw new HttpTlsConfigurationException("TLS Manager HTTPS protocols or cipher suites are unavailable");
+        }
+        return HttpHelperTls.socketFactory(material, protocols, ciphers);
     }
 
     public SSLConnectionSocketFactory getConnectorSocketFactory(WeirdIntermediaryContextContainer contextContainer) {
