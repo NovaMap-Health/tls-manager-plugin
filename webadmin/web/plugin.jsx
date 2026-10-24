@@ -1375,7 +1375,7 @@ function TlsManagerPanel() {
                 </div>
             </div>
             <div className="text-text-faint" style={{ marginTop: '10px', fontSize: '11px' }}>
-                {version ? `TLS Manager Plugin ${version} · ` : ''}Sponsored by NovaMap Health &amp; Diridium Technologies, donated to the Open Integration Engine.
+                {version ? `TLS Manager Plugin ${version} · ` : ''}Sponsored by NovaMap Health &amp; Diridium Technologies, donated to the Open Integration Engine initiative.
             </div>
         </div>
     );
