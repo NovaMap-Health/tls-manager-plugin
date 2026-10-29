@@ -50,6 +50,22 @@ function buildPlugin() {
 
   echo "########################################"
   echo
+  echo "   Copying Web Administrator plugin..."
+  echo
+  echo "########################################"
+
+  rsync -a \
+    --exclude 'node_modules/' \
+    --exclude 'package.json' \
+    --exclude 'package-lock.json' \
+    --exclude '.gitignore' \
+    --exclude 'build.mjs' \
+    --exclude 'tests/' \
+    --exclude 'web/plugin.jsx' \
+    webadmin/ "$STAGING_DIR/webadmin/"
+
+  echo "########################################"
+  echo
   echo "   Packaging plugin..."
   echo
   echo "########################################"
