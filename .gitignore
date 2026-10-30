@@ -11,4 +11,5 @@ docker/pgdata
 docker/conf
 docker/appdata
 
+web-ui/*.war
 tools/cert-revocation/mini-ca
