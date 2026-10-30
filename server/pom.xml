@@ -17,10 +17,6 @@
 
     <artifactId>server</artifactId>
 
-    <properties>
-        <javax-servlet.version>4.0.1</javax-servlet.version>
-    </properties>
-
     <dependencies>
         <dependency>
             <groupId>org.bouncycastle</groupId>
@@ -43,7 +39,7 @@
         <dependency>
             <groupId>javax.servlet</groupId>
             <artifactId>javax.servlet-api</artifactId>
-            <version>${javax-servlet.version}</version>
+            <version>3.1.0</version>
             <scope>provided</scope>
         </dependency>
 
@@ -92,7 +88,7 @@
         <dependency>
             <groupId>org.eclipse.jetty</groupId>
             <artifactId>jetty-server</artifactId>
-            <version>9.4.53.v20231009</version>
+            <version>9.4.57.v20241219</version>
             <scope>provided</scope>
         </dependency>
 
