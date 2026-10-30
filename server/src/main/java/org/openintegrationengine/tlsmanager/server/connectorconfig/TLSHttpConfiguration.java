@@ -17,6 +17,7 @@ import lombok.extern.slf4j.Slf4j;
 import org.apache.http.config.RegistryBuilder;
 import org.apache.http.conn.socket.ConnectionSocketFactory;
 import org.eclipse.jetty.http.HttpVersion;
+import org.eclipse.jetty.server.HttpConfiguration;
 import org.eclipse.jetty.server.HttpConnectionFactory;
 import org.eclipse.jetty.server.SecureRequestCustomizer;
 import org.eclipse.jetty.server.ServerConnector;
@@ -79,8 +80,16 @@ public class TLSHttpConfiguration extends DefaultHttpConfiguration {
 
         } else {
             var tlsContext = socketFactoryService.generateTLSContext(tlsConnectorProperties);
+            HttpConfiguration httpConfig;
 
-            var httpConfig = createHttpConfig(connector);
+            try {
+                httpConfig = createHttpConfig(connector);
+            } catch (NoSuchMethodError e) {
+                // Pre-4.7.0 version of OIE
+                httpConfig = new HttpConfiguration();
+                httpConfig.setSendServerVersion(false);
+                httpConfig.setSendXPoweredBy(false);
+            }
             httpConfig.addCustomizer(new SecureRequestCustomizer());
 
             var sslContextFactory = new SslContextFactory.Server();
