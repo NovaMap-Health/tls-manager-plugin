@@ -77,11 +77,16 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Set;
 import java.util.function.BiConsumer;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 
 import static org.openintegrationengine.tlsmanager.shared.TLSPluginConstants.PKCS12;
 
 @Slf4j
 public final class CertificateService {
+
+    private static final Pattern PEM_CERTIFICATE =
+        Pattern.compile("-----BEGIN CERTIFICATE-----(.*?)-----END CERTIFICATE-----", Pattern.DOTALL);
 
     @Getter
     private KeyStore systemTrustStore;
@@ -323,7 +328,7 @@ public final class CertificateService {
         return channelsInUse;
     }
 
-    private String encodeCertificateChain(Certificate... chain) throws CertificateEncodingException {
+    static String encodeCertificateChain(Certificate... chain) throws CertificateEncodingException {
         StringBuilder pem = new StringBuilder();
 
         for (Certificate cert : chain) {
@@ -368,15 +373,51 @@ public final class CertificateService {
         }
     }
 
-    private X509Certificate decodeCertificate(String certificate) throws CertificateException {
+    /**
+     * Decodes a trusted certificate entry, which holds exactly one certificate.
+     */
+    private static X509Certificate decodeCertificate(String certificate) throws CertificateException {
+        X509Certificate[] chain = decodeCertificateChain(certificate);
+        if (chain.length != 1) {
+            throw new CertificateException("A trusted certificate entry must contain exactly one certificate but "
+                + chain.length + " were supplied; import each certificate under its own alias.");
+        }
+        return chain[0];
+    }
+
+    /**
+     * Decodes every certificate in a PEM string, preserving order, so a full chain
+     * (leaf first, then intermediates) round-trips with {@link #encodeCertificateChain}.
+     * Each PEM block is decoded separately: stripping all markers and decoding the
+     * concatenation fails on the first block's Base64 padding. Bare Base64 without PEM
+     * markers is still accepted as a single certificate.
+     */
+    static X509Certificate[] decodeCertificateChain(String certificate) throws CertificateException {
+        if (certificate == null || certificate.isBlank()) {
+            throw new CertificateException("No certificate supplied");
+        }
+
+        List<String> blocks = new ArrayList<>();
+        Matcher matcher = PEM_CERTIFICATE.matcher(certificate);
+        while (matcher.find()) {
+            blocks.add(matcher.group(1));
+        }
+        if (blocks.isEmpty()) {
+            blocks.add(certificate);
+        }
+
         CertificateFactory cf = CertificateFactory.getInstance("X.509");
-        String certContent = certificate
-            .replaceAll("-----BEGIN CERTIFICATE-----", "")
-            .replaceAll("-----END CERTIFICATE-----", "")
-            .replaceAll("\\s+", "");
-        byte[] certBytes = Base64.getDecoder().decode(certContent);
-        return (X509Certificate) cf.generateCertificate(
-            new java.io.ByteArrayInputStream(certBytes));
+        X509Certificate[] chain = new X509Certificate[blocks.size()];
+        for (int i = 0; i < blocks.size(); i++) {
+            byte[] certBytes;
+            try {
+                certBytes = Base64.getDecoder().decode(blocks.get(i).replaceAll("\\s+", ""));
+            } catch (IllegalArgumentException e) {
+                throw new CertificateException("Certificate " + (i + 1) + " is not valid Base64", e);
+            }
+            chain[i] = (X509Certificate) cf.generateCertificate(new ByteArrayInputStream(certBytes));
+        }
+        return chain;
     }
 
     private PrivateKey decodeKey(String key) throws CertificateException, NoSuchAlgorithmException, InvalidKeySpecException, IOException {
@@ -421,9 +462,9 @@ public final class CertificateService {
             ks.load(null, password);
 
             for (LocalCertificate certificate : localCertificates) {
-                X509Certificate cert = decodeCertificate(certificate.getCertificate());
+                X509Certificate[] chain = decodeCertificateChain(certificate.getCertificate());
                 PrivateKey privateKey = decodeKey(certificate.getKey());
-                ks.setKeyEntry(certificate.getAlias(), privateKey, password, new Certificate[]{cert});
+                ks.setKeyEntry(certificate.getAlias(), privateKey, password, chain);
             }
             ByteArrayOutputStream out = new ByteArrayOutputStream();
             ks.store(out, password);
